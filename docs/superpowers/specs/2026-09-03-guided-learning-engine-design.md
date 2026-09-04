@@ -87,8 +87,7 @@ title: Plant care and propagation
 subjectType: variety
 context:
   zone:
-    type: enum
-    values: [1a, 1b, 2a, 2b, 3a, 3b, 4a, 4b, 5a, 5b, 6a, 6b, 7a, 7b, 8a, 8b, 9a, 9b, 10a, 10b, 11a, 11b, 12a, 12b, 13a, 13b]
+    type: usda-zone
     optional: true
   indoor:
     type: boolean
@@ -190,7 +189,9 @@ when: { indoor: true, zone: { gte: 9 } }
 when: { any: [ { zone: { lte: 6 } }, { indoor: false } ] }
 ```
 
-USDA zones compare by their numeric part, so `9a` and `9b` both satisfy `{ gte: 9 }`. The engine gets a small set of typed comparators (number, boolean, enum, usda-zone) rather than a general expression language, which keeps conditions readable and statically checkable.
+USDA zones are ordered, not just enumerated, so they get their own comparator type. A zone is encoded as its number plus a half step for the `b` band (`9a` is 9.0, `9b` is 9.5). A bare integer threshold expands to whichever end of the band the author obviously meant: `{ gte: 9 }` is 9.0 and so includes both `9a` and `9b`, while `{ lte: 8 }` is 8.5 and so includes both `8a` and `8b`. Write the letter explicitly (`{ lte: '8a' }`) when you want just one band.
+
+The engine gets a small set of typed comparators (number, boolean, enum, usda-zone) rather than a general expression language, which keeps conditions readable and statically checkable.
 
 ## 8. Cadence
 
