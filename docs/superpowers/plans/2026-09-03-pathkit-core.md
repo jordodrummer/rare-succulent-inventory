@@ -696,6 +696,11 @@ git commit -m "add subject field interpolation"
 
 `defaultContext()` is what the consuming site passes when statically generating the base, indexable version of a page (spec section 10). Plan 2 depends on it.
 
+`cadence` is interpolated like every other user-visible field, because the spec
+allows a subject-varying interval written as `{{ water_interval_days }}d`. The
+Task 4 parser keeps that placeholder raw and the Task 6 validator checks it
+against every subject, so the resolver is where it gets substituted.
+
 - [ ] **Step 1: Write the failing test `src/resolve/index.test.ts`**
 
 ```ts
@@ -808,6 +813,18 @@ describe('resolve', () => {
     const result = resolve(path, null, { indoor: true }, { area })
     expect(result.steps[1]?.body).toBe('Dry it for days.')
   })
+
+  it('interpolates a subject varying cadence', () => {
+    const watering: Path = {
+      ...path,
+      steps: [
+        { id: 'water', title: 'Water it', body: 'Water thoroughly.', cadence: '{{ water_interval_days }}d' },
+      ],
+    }
+    const thirsty: Subject = { id: 'sedum', name: 'Sedum', fields: { water_interval_days: 14 } }
+    const result = resolve(watering, thirsty, { indoor: true }, { area })
+    expect(result.steps[0]?.cadence).toBe('14d')
+  })
 })
 
 describe('withDefaults', () => {
@@ -874,7 +891,7 @@ export function resolve(
       id: step.id,
       title: interpolate(step.title, fields, options),
       body: interpolate(body, fields, options),
-      cadence: step.cadence ?? null,
+      cadence: step.cadence == null ? null : interpolate(step.cadence, fields, options),
       evidence: step.evidence,
       why: step.why === undefined ? undefined : interpolate(step.why, fields, options),
       sources: step.sources ?? [],
