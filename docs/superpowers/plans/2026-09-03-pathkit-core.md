@@ -581,6 +581,14 @@ describe('interpolate', () => {
   it('renders false and zero rather than dropping them', () => {
     expect(interpolate('{{ a }}/{{ b }}', { a: 0, b: false })).toBe('0/false')
   })
+
+  it('leaves a hard break on another line alone when a field is missing', () => {
+    expect(interpolate('line one  \nline two {{ missing }}.', {})).toBe('line one  \nline two.')
+  })
+
+  it('collapses only the spacing around the dropped placeholder', () => {
+    expect(interpolate('a  b {{ missing }} c  d', {})).toBe('a  b c  d')
+  })
 })
 
 describe('placeholderNames', () => {
@@ -604,7 +612,16 @@ Expected: FAIL, cannot resolve `./interpolate`.
 ```ts
 import type { ContextValue } from '../types'
 
+// Exported for name extraction only. It carries the global flag, so callers
+// must not use .test() or .exec() on it: lastIndex persists between calls and
+// makes those methods return alternating results. Use placeholderNames().
 export const PLACEHOLDER_PATTERN = /\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g
+
+// Matches a placeholder together with the horizontal whitespace and trailing
+// punctuation around it, so a dropped placeholder can be repaired in place
+// rather than by a pass over the whole body.
+const PLACEHOLDER_IN_CONTEXT =
+  /([ \t]*)\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}([ \t]*)([,.;:!?])?/g
 
 export interface InterpolateOptions {
   onWarn?: (message: string) => void
@@ -623,26 +640,31 @@ export function interpolate(
   fields: Record<string, ContextValue>,
   options: InterpolateOptions = {}
 ): string {
-  let droppedAny = false
-
-  const substituted = body.replace(PLACEHOLDER_PATTERN, (_match, name: string) => {
-    if (Object.prototype.hasOwnProperty.call(fields, name)) {
-      return String(fields[name])
+  return body.replace(
+    PLACEHOLDER_IN_CONTEXT,
+    (_match, before: string, name: string, after: string, punctuation: string | undefined) => {
+      const trailing = punctuation ?? ''
+      if (Object.prototype.hasOwnProperty.call(fields, name)) {
+        return `${before}${String(fields[name])}${after}${trailing}`
+      }
+      options.onWarn?.(`Missing subject field "${name}"; rendered as empty`)
+      // Repair only what the removal left behind: collapse the space on both
+      // sides to one, drop it entirely before punctuation or at an edge, and
+      // never touch whitespace elsewhere in the body, because two trailing
+      // spaces on another line are a markdown hard break.
+      if (trailing !== '') return trailing
+      if (before !== '' && after !== '') return ' '
+      return ''
     }
-    droppedAny = true
-    options.onWarn?.(`Missing subject field "${name}"; rendered as empty`)
-    return ''
-  })
-
-  // Only repair whitespace when a placeholder was dropped. Doing it
-  // unconditionally would eat markdown hard breaks in authored text.
-  return droppedAny ? repairSpacing(substituted) : substituted
-}
-
-function repairSpacing(text: string): string {
-  return text.replace(/[ \t]{2,}/g, ' ').replace(/[ \t]+([,.;:!?])/g, '$1')
+  )
 }
 ```
+
+The repair happens inside the replace callback, scoped to the text the removal
+actually disturbed. An earlier draft of this plan did a global whitespace pass
+over the whole body whenever any placeholder was dropped, which silently
+collapsed a markdown hard break on an unrelated line. The last two tests below
+pin that.
 
 - [ ] **Step 4: Run the test and confirm it passes**
 
