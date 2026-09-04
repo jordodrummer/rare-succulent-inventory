@@ -1563,6 +1563,43 @@ describe('FileContentSource', () => {
   it('lists the areas under the root', async () => {
     expect(await (await sourceFor()).listAreas()).toEqual(['plants'])
   })
+
+  it('throws ContentError for an unknown area', async () => {
+    await expect((await sourceFor()).getArea('mushrooms')).rejects.toThrow(ContentError)
+  })
+
+  it('throws ContentError for an unknown path id', async () => {
+    await expect((await sourceFor()).getPath('plants', 'no-such-path')).rejects.toThrow(ContentError)
+  })
+
+  it('throws ContentError for an unknown subject', async () => {
+    await expect((await sourceFor()).getSubject('plants', 'no-such-plant')).rejects.toThrow(ContentError)
+  })
+
+  it('throws ContentError when a path directory has no manifest', async () => {
+    const source = await sourceFor({ 'plants/paths/orphaned/01-step.mdx': '---\nid: step\ntitle: Step\n---\nBody.' })
+    await expect(source.getPath('plants', 'orphaned')).rejects.toThrow(ContentError)
+  })
+
+  it('ignores a stray file sitting in the paths directory', async () => {
+    const source = await sourceFor({ 'plants/paths/NOTES': 'scratch notes, not a path' })
+    expect((await source.listPaths('plants')).map((path) => path.id)).toEqual(['leaf-propagation'])
+  })
+
+  it('lists a path directory whose name contains a dot', async () => {
+    const source = await sourceFor({
+      'plants/paths/5.5-inch-pot/path.yml': 'id: 5.5-inch-pot\ntitle: Potting up to 5.5 inch\nsteps: [repot]\n',
+      'plants/paths/5.5-inch-pot/01-repot.mdx': '---\nid: repot\ntitle: Repot it\n---\nMove it up one size.',
+    })
+    expect((await source.listPaths('plants')).map((path) => path.id)).toEqual(['5.5-inch-pot', 'leaf-propagation'])
+  })
+
+  it('returns an empty list when an area has no paths directory', async () => {
+    const source = new FileContentSource(await writeTree({
+      'plants/area.yml': 'id: plants\ntitle: Plants\ncontext: {}\n',
+    }))
+    expect(await source.listPaths('plants')).toEqual([])
+  })
 })
 ```
 
@@ -1574,6 +1611,7 @@ Expected: FAIL, cannot resolve `../src/content/file-source`.
 - [ ] **Step 4: Write `src/content/file-source.ts`**
 
 ```ts
+import type { Dirent } from 'node:fs'
 import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { Area, ContentSource, Myth, Path, PathSummary, Step, Subject } from '../types'
@@ -1594,18 +1632,15 @@ export class FileContentSource implements ContentSource {
 
   async getArea(area: string): Promise<Area> {
     const file = join(this.root, area, 'area.yml')
-    return parseArea(file, await readFile(file, 'utf8'))
+    return parseArea(file, await readContentFile(file, 'utf8'))
   }
 
   async listPaths(area: string): Promise<PathSummary[]> {
     const dir = join(this.root, area, 'paths')
-    const entries = await readdirOrEmpty(dir)
     const summaries: PathSummary[] = []
-    for (const name of entries) {
-      // Path directories never contain a dot; this skips stray files.
-      if (name.includes('.')) continue
+    for (const name of await readdirOrEmpty(dir, { directoriesOnly: true })) {
       const file = join(dir, name, 'path.yml')
-      const manifest = parsePathManifest(file, await readFile(file, 'utf8'))
+      const manifest = parsePathManifest(file, await readContentFile(file, 'utf8'))
       summaries.push({ id: manifest.id, title: manifest.title, summary: manifest.summary })
     }
     return summaries.sort((a, b) => a.id.localeCompare(b.id))
@@ -1614,7 +1649,7 @@ export class FileContentSource implements ContentSource {
   async getPath(area: string, id: string): Promise<Path> {
     const dir = join(this.root, area, 'paths', id)
     const manifestFile = join(dir, 'path.yml')
-    const manifest = parsePathManifest(manifestFile, await readFile(manifestFile, 'utf8'))
+    const manifest = parsePathManifest(manifestFile, await readContentFile(manifestFile, 'utf8'))
     const byId = await this.readSteps(dir)
 
     const steps: Step[] = []
@@ -1638,9 +1673,9 @@ export class FileContentSource implements ContentSource {
   // the authoritative order is the steps list in path.yml.
   async readSteps(dir: string): Promise<Map<string, Step>> {
     const byId = new Map<string, Step>()
-    for (const name of await readdirOrEmpty(dir, '.mdx')) {
+    for (const name of await readdirOrEmpty(dir, { extension: '.mdx' })) {
       const file = join(dir, name)
-      const step = parseStep(file, await readFile(file, 'utf8'))
+      const step = parseStep(file, await readContentFile(file, 'utf8'))
       if (byId.has(step.id)) throw new ContentError(file, [`id: duplicate step id "${step.id}"`])
       byId.set(step.id, step)
     }
@@ -1649,15 +1684,15 @@ export class FileContentSource implements ContentSource {
 
   async getSubject(area: string, id: string): Promise<Subject> {
     const file = join(this.root, area, 'subjects', `${id}.yml`)
-    return parseSubject(file, await readFile(file, 'utf8'))
+    return parseSubject(file, await readContentFile(file, 'utf8'))
   }
 
   async listSubjects(area: string): Promise<Subject[]> {
     const dir = join(this.root, area, 'subjects')
     const subjects: Subject[] = []
-    for (const name of await readdirOrEmpty(dir, '.yml')) {
+    for (const name of await readdirOrEmpty(dir, { extension: '.yml' })) {
       const file = join(dir, name)
-      subjects.push(parseSubject(file, await readFile(file, 'utf8')))
+      subjects.push(parseSubject(file, await readContentFile(file, 'utf8')))
     }
     return subjects.sort((a, b) => a.id.localeCompare(b.id))
   }
@@ -1665,26 +1700,48 @@ export class FileContentSource implements ContentSource {
   async listMyths(area: string): Promise<Myth[]> {
     const dir = join(this.root, area, 'myths')
     const myths: Myth[] = []
-    for (const name of await readdirOrEmpty(dir, '.mdx')) {
+    for (const name of await readdirOrEmpty(dir, { extension: '.mdx' })) {
       const file = join(dir, name)
-      myths.push(parseMyth(file, await readFile(file, 'utf8')))
+      myths.push(parseMyth(file, await readContentFile(file, 'utf8')))
     }
     return myths.sort((a, b) => a.id.localeCompare(b.id))
   }
 }
 
-// A missing optional directory is not an error. A malformed one still is,
-// because readdir only throws ENOENT for absence.
-async function readdirOrEmpty(dir: string, extension?: string): Promise<string[]> {
-  let entries: string[]
+// Content errors fail the build, so a missing or unreadable content file must
+// surface as a ContentError naming the file, not as a raw Node errno.
+async function readContentFile(file: string): Promise<string> {
   try {
-    entries = await readdir(dir)
+    return await readFile(file, 'utf8')
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === 'ENOENT') throw new ContentError(file, ['file not found'])
+    if (code === 'ENOTDIR') throw new ContentError(file, ['parent path is not a directory'])
+    throw error
+  }
+}
+
+// A missing optional directory is not an error. Every other error code still
+// throws, so a permissions failure never masquerades as empty content.
+// Filtering on the dirent type rather than on the name matters: a path
+// directory may legitimately contain a dot, as in "5.5-inch-pot".
+async function readdirOrEmpty(
+  dir: string,
+  options: { extension?: string; directoriesOnly?: boolean } = {}
+): Promise<string[]> {
+  let entries: Dirent[]
+  try {
+    entries = await readdir(dir, { withFileTypes: true })
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
     throw error
   }
-  const filtered = extension ? entries.filter((name) => name.endsWith(extension)) : entries
-  return filtered.sort()
+  const kept = entries.filter((entry) => {
+    if (options.directoriesOnly) return entry.isDirectory()
+    if (!entry.isFile()) return false
+    return options.extension === undefined || entry.name.endsWith(options.extension)
+  })
+  return kept.map((entry) => entry.name).sort()
 }
 ```
 
