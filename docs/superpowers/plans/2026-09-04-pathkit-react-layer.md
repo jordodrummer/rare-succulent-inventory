@@ -604,7 +604,7 @@ These two components are where the product's central promise becomes visible to 
 ```bash
 cd ~/Documents/visualstudiocode/pathkit
 npm install --save-peer react
-npm install -D react react-dom @types/react @types/react-dom @testing-library/react @testing-library/dom jsdom
+npm install -D react react-dom @types/react @types/react-dom @testing-library/react @testing-library/dom @testing-library/user-event jsdom
 ```
 
 In `package.json`, set the peer range and add the export. `peerDependencies` should read `"react": "^18 || ^19"`, and add to `exports`:
@@ -620,6 +620,8 @@ In `package.json`, set the peer range and add the export. `peerDependencies` sho
 In `tsconfig.json`, add `"jsx": "react-jsx"` to `compilerOptions`.
 
 In `tsup.config.ts`, add `'src/react/index.ts'` to `entry` and add `external: ['react', 'react/jsx-runtime']` so React is never bundled into the package.
+
+Tests in Tasks 4, 5 and 6 use `userEvent` from `@testing-library/user-event`, which is why it is in the install list above. The assertions throughout use plain Vitest matchers, so `@testing-library/jest-dom` is deliberately not needed.
 
 - [ ] **Step 2: Write the failing test `src/react/evidence.test.tsx`**
 
