@@ -106,13 +106,16 @@ mkdir -p src/resolve src/content src/cli test/fixtures
   "devDependencies": {
     "@types/node": "^26.4.1",
     "tsup": "^8.5.1",
-    "typescript": "^7.0.2",
+    "typescript": "^5.9.3",
     "vitest": "^4.1.11"
   }
 }
 ```
 
-Declare whatever `npm install` actually resolved. Caret ranges cannot cross a
+TypeScript is held at 5.x deliberately. Version 7 no longer exports `ts.sys`,
+which crashes the `rollup-plugin-dts` that tsup bundles for declaration
+generation, so the package cannot build at all on it. Otherwise, declare
+whatever `npm install` actually resolved. Caret ranges cannot cross a
 major, so a range that disagrees with the installed major means CI builds a
 different toolchain than the one your tests passed on. Check with
 `npm ls --depth=0` and make each range match its installed major.
