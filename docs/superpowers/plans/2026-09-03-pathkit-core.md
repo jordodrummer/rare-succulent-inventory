@@ -100,17 +100,27 @@ mkdir -p src/resolve src/content src/cli test/fixtures
   },
   "dependencies": {
     "gray-matter": "^4.0.3",
-    "yaml": "^2.5.0",
-    "zod": "^3.23.8"
+    "yaml": "^2.9.0",
+    "zod": "^4.5.4"
   },
   "devDependencies": {
-    "@types/node": "^20.14.0",
-    "tsup": "^8.2.0",
-    "typescript": "^5.5.0",
-    "vitest": "^2.0.0"
+    "@types/node": "^26.4.1",
+    "tsup": "^8.5.1",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
   }
 }
 ```
+
+Declare whatever `npm install` actually resolved. Caret ranges cannot cross a
+major, so a range that disagrees with the installed major means CI builds a
+different toolchain than the one your tests passed on. Check with
+`npm ls --depth=0` and make each range match its installed major.
+
+Until Task 7 creates `src/index.ts` and `src/cli/validate.ts`, the `prepare`
+script has no entry points to build, so plain `npm install` fails at that
+lifecycle step. Use `npm install --ignore-scripts` for the rest of this plan.
+It resolves itself once Task 7 lands.
 
 `tsconfig.json`:
 
