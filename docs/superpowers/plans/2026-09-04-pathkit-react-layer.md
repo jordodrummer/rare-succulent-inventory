@@ -58,7 +58,8 @@ Task 1 is independent of the React work and closes existing debt. Tasks 2 throug
 ### Task 1: Close the ContentSource abstraction
 
 **Files:**
-- Modify: `src/types.ts` (the `ContentSource` interface)
+- Modify: `src/types.ts` (the `ContentSource` interface, and `PathManifest` moves here)
+- Modify: `src/content/parse.ts` (re-export `PathManifest` from its new home)
 - Modify: `src/content/file-source.ts`
 - Modify: `src/content/validate.ts`
 - Test: `test/validate.test.ts`, `test/file-source.test.ts`
@@ -163,7 +164,7 @@ Import `PathManifest` into `src/types.ts` from `./content/parse`, or move the `P
   }
 
   async getPathManifest(area: string, directory: string): Promise<PathManifest> {
-    assertSafeId(directory)
+    assertSafeId(area, directory)
     const file = join(this.root, area, 'paths', directory, 'path.yml')
     return parsePathManifest(file, await readContentFile(file))
   }
@@ -188,7 +189,7 @@ Now add the lenient reader:
   // Lenient counterpart to readSteps: returns what parsed, plus a problem per
   // file that did not, so one broken step cannot hide the rest of its path.
   async readPathSteps(area: string, directory: string): Promise<StepReadResult> {
-    assertSafeId(directory)
+    assertSafeId(area, directory)
     const dir = join(this.root, area, 'paths', directory)
     const steps: Step[] = []
     const problems: StepReadProblem[] = []
