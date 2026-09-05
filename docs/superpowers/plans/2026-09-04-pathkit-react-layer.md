@@ -23,6 +23,10 @@
 - React and `react/jsx-runtime` are peer dependencies and must be `external` in the build, never bundled.
 - Evidence levels: `established`, `consensus`, `contested`, `anecdotal`. Sources required: 1, 1, 2, 0 respectively; omitting `evidence` is allowed and requires none.
 - Commit messages: bare imperative, no conventional-commit prefix.
+- **Verify "pristine output" with `npx vitest run --reporter=verbose`.** The default
+  reporter suppresses console output for passing tests, so a React warning such as a
+  duplicate-key error is invisible in a green run. A claim that output is clean,
+  made from the default reporter, is not evidence.
 
 ## Decisions this plan locks in
 
