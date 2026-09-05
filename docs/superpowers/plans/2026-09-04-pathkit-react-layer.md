@@ -642,7 +642,11 @@ git commit -m "add progress stores with an in-memory fallback"
   - `<EvidenceBadge evidence={EvidenceLevel | undefined} />`
   - `<SourceList sources={Source[]} heading?: string />`
 
-These two components are where the product's central promise becomes visible to a reader, so they are built before anything that composes them. A step marked `contested` must look different from one marked `established`, and the sources have to be reachable, or the evidence model is invisible bookkeeping.
+These two components are where the product's central promise becomes visible to a reader, so they are built before anything that composes them.
+
+Note the key on each source list item deliberately falls back to title plus index
+rather than to `reference`. Two different books can share a short-form citation
+like "Chapter 4", and a `reference`-based key would collide for them. A step marked `contested` must look different from one marked `established`, and the sources have to be reachable, or the evidence model is invisible bookkeeping.
 
 - [ ] **Step 1: Add the toolchain**
 
@@ -710,6 +714,11 @@ describe('EvidenceBadge', () => {
     expect(screen.getByText('Credible people disagree')).toBeDefined()
   })
 
+  it('names the consensus level in practitioner terms', () => {
+    render(<EvidenceBadge evidence="consensus" />)
+    expect(screen.getByText('Growers broadly agree')).toBeDefined()
+  })
+
   it('says plainly that anecdotal is one person experience', () => {
     render(<EvidenceBadge evidence="anecdotal" />)
     expect(screen.getByText("One grower's experience")).toBeDefined()
@@ -753,6 +762,23 @@ describe('SourceList', () => {
   it('renders nothing for an empty list', () => {
     const { container } = render(<SourceList sources={[]} />)
     expect(container.firstChild).toBeNull()
+  })
+
+  it('does not collide keys for two sources sharing a reference', () => {
+    const shared = [
+      { title: 'One book', reference: 'Chapter 4' },
+      { title: 'Another book', reference: 'Chapter 4' },
+    ]
+    const { container } = render(<SourceList sources={shared} />)
+    expect(container.querySelectorAll('li.pk-source')).toHaveLength(2)
+    expect(screen.getByText('One book')).toBeDefined()
+    expect(screen.getByText('Another book')).toBeDefined()
+  })
+
+  it('renders a source with neither url nor reference as a plain title', () => {
+    render(<SourceList sources={[{ title: 'Just a title' }]} />)
+    expect(screen.queryByRole('link')).toBeNull()
+    expect(screen.getByText('Just a title')).toBeDefined()
   })
 })
 
@@ -836,7 +862,7 @@ export function SourceList({ sources, heading = 'Sources' }: SourceListProps) {
       <h3 className="pk-sources-heading">{heading}</h3>
       <ol className="pk-source-items">
         {sources.map((source, index) => (
-          <li className="pk-source" key={source.url ?? source.reference ?? `${source.title}-${index}`}>
+          <li className="pk-source" key={source.url ?? `${source.title}-${index}`}>
             {source.url === undefined ? (
               <span className="pk-source-title">{source.title}</span>
             ) : (
