@@ -405,7 +405,11 @@ describe('LocalStorageProgressStore', () => {
 
   it('returns empty rather than throwing on corrupt stored JSON', async () => {
     const storage = fakeStorage()
-    storage.setItem('pathkit:progress:p', 'not json at all')
+    await new LocalStorageProgressStore({ storage }).setStepDone('p', 'seed', true)
+    const key = storage.key(0)
+    expect(key).not.toBeNull()
+    storage.setItem(key as string, 'not json at all')
+
     const onWarn = vi.fn()
     expect(await new LocalStorageProgressStore({ storage, onWarn }).get('p')).toEqual({})
     expect(onWarn).toHaveBeenCalled()
@@ -413,8 +417,34 @@ describe('LocalStorageProgressStore', () => {
 
   it('ignores stored JSON of the wrong shape', async () => {
     const storage = fakeStorage()
-    storage.setItem('pathkit:progress:p', '["not", "an", "object"]')
-    expect(await new LocalStorageProgressStore({ storage }).get('p')).toEqual({})
+    await new LocalStorageProgressStore({ storage }).setStepDone('p', 'seed', true)
+    const key = storage.key(0)
+    storage.setItem(key as string, '["not", "an", "object"]')
+
+    const onWarn = vi.fn()
+    expect(await new LocalStorageProgressStore({ storage, onWarn }).get('p')).toEqual({})
+    expect(onWarn).toHaveBeenCalled()
+  })
+
+  it('degrades when touching the ambient localStorage throws', async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage')
+    Object.defineProperty(globalThis, 'localStorage', {
+      configurable: true,
+      get() {
+        throw new Error('access denied')
+      },
+    })
+    try {
+      const store = new LocalStorageProgressStore()
+      await store.setStepDone('p', 's', true)
+      expect(await store.get('p')).toEqual({ s: true })
+    } finally {
+      if (descriptor === undefined) {
+        Reflect.deleteProperty(globalThis, 'localStorage')
+      } else {
+        Object.defineProperty(globalThis, 'localStorage', descriptor)
+      }
+    }
   })
 
   it('degrades to memory when no storage exists at all', async () => {
@@ -560,6 +590,19 @@ export class LocalStorageProgressStore implements ProgressStore {
 ```
 
 Note the `'storage' in options` check: passing `{ storage: undefined }` explicitly must mean "no storage", while omitting it means "use the ambient localStorage". A plain `??` would conflate the two and break the last test.
+
+Two further points the tests above depend on. Warn on wrong-shape stored JSON as
+well as on unparseable JSON, so a reader debugging a silent progress reset gets
+the same signal either way. And do not assume a thrown value is an `Error`:
+use a `describeError(error: unknown)` helper returning
+`error instanceof Error ? error.message : String(error)` in both catch blocks,
+or a non-Error throw produces a warning reading "undefined".
+
+The corrupt-data tests deliberately seed through the store's own write and then
+overwrite whichever key it chose, rather than naming `pathkit:progress:p`
+directly. Task 5 refactors this class onto a shared storage helper and requires
+these tests to pass unchanged, so a test that hardcodes the key layout would
+break on a refactor that changed nothing about the public contract.
 
 - [ ] **Step 6: Write `src/progress/index.ts`**
 
