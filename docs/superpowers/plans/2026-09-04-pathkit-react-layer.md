@@ -1597,6 +1597,11 @@ export function usePersistedContext(
   area: Area,
   options: UsePersistedContextOptions = {}
 ): UsePersistedContextResult {
+  // Destructure rather than depending on the options object. The default
+  // parameter builds a fresh {} on every invocation, so an effect that depends
+  // on `options` re-fires on every render, reloads, sets state, re-renders, and
+  // never settles. Depend on the stable values inside it.
+  const { onWarn } = options
   const prefix = options.keyPrefix ?? 'pathkit:context:'
   const key = `${prefix}${area.id}`
   const storage = 'storage' in options ? options.storage : defaultStorage()
@@ -1607,20 +1612,20 @@ export function usePersistedContext(
   const [hydrated, setHydrated] = useState(false)
 
   useEffect(() => {
-    const stored = safeGetJson(storage, key, options.onWarn)
+    const stored = safeGetJson(storage, key, onWarn)
     if (typeof stored === 'object' && stored !== null && !Array.isArray(stored)) {
       setContextState(withDefaults(area, stored as Context))
     }
     setHydrated(true)
     // area.id and key identify the area; the storage object is stable per mount.
-  }, [area, key, storage])
+  }, [area, key, storage, onWarn])
 
   const setContext = useCallback(
     (next: Context) => {
       setContextState(next)
-      safeSetJson(storage, key, next, options.onWarn)
+      safeSetJson(storage, key, next, onWarn)
     },
-    [storage, key]
+    [storage, key, onWarn]
   )
 
   return { context, setContext, hydrated }
