@@ -926,6 +926,11 @@ git commit -m "add react entry with evidence badge and source list"
   - `<StepItem step={ResolvedStep} index={number} done={boolean} onToggle={(done: boolean) => void} renderMarkdown?={RenderMarkdown} />`
   - `<StepList steps={ResolvedStep[]} done={Record<string, boolean>} onToggle={(stepId: string, done: boolean) => void} renderMarkdown?={RenderMarkdown} />`
 
+The step number sits outside the `<h3>` on purpose. `heading.textContent` is
+recursive, so a number nested inside the heading would make the accessible heading
+text read "1Let it callus", and the `StepList` test below asserts the headings are
+exactly the step titles.
+
 The `why` field renders inside a `<details>` element, collapsed by default. The spec's reasoning is that a reader who knows why bottom-watering works can adapt when their situation differs from the author's, which is the difference between a guide and a recipe. Collapsed keeps the instruction scannable while leaving the mechanism one click away.
 
 - [ ] **Step 1: Write the failing test `src/react/steps.test.tsx`**
@@ -1157,11 +1162,9 @@ export function StepItem({ step, index, done, onToggle, renderMarkdown = renderP
           checked={done}
           onChange={(event) => onToggle(event.target.checked)}
         />
+        <span className="pk-step-number">{index + 1}</span>
         <h3 className="pk-step-title">
-          <label htmlFor={checkboxId}>
-            <span className="pk-step-number">{index + 1}</span>
-            {step.title}
-          </label>
+          <label htmlFor={checkboxId}>{step.title}</label>
         </h3>
         <EvidenceBadge evidence={step.evidence} />
       </div>
