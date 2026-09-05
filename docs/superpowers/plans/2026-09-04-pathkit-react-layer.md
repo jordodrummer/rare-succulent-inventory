@@ -630,7 +630,8 @@ git commit -m "add progress stores with an in-memory fallback"
 
 **Files:**
 - Modify: `package.json` (peer deps, dev deps, `./react` export), `tsconfig.json` (jsx), `tsup.config.ts` (react entry)
-- Create: `src/react/markdown.tsx`, `src/react/evidence.tsx`
+- Create: `src/react/markdown.tsx`, `src/react/evidence.tsx`, `src/react/index.ts`, `vitest.setup.ts`
+- Modify: `vitest.config.ts`
 - Test: `src/react/evidence.test.tsx`
 
 **Interfaces:**
@@ -662,6 +663,27 @@ In `package.json`, set the peer range and add the export. `peerDependencies` sho
 ```
 
 In `tsconfig.json`, add `"jsx": "react-jsx"` to `compilerOptions`.
+
+In `vitest.config.ts`, widen the include glob to pick up `.tsx` test files and add
+a setup file. Without the first change the React tests are silently never
+collected, which looks exactly like passing; without the second, Testing Library
+never auto-cleans the DOM between tests and they pollute each other:
+
+```ts
+    include: ['src/**/*.test.ts', 'src/**/*.test.tsx', 'test/**/*.test.ts'],
+    setupFiles: ['./vitest.setup.ts'],
+```
+
+Create `vitest.setup.ts` at the repo root:
+
+```ts
+import { cleanup } from '@testing-library/react'
+import { afterEach } from 'vitest'
+
+afterEach(() => {
+  cleanup()
+})
+```
 
 In `tsup.config.ts`, add `'src/react/index.ts'` to `entry` and add `external: ['react', 'react/jsx-runtime']` so React is never bundled into the package.
 
@@ -837,10 +859,25 @@ export function SourceList({ sources, heading = 'Sources' }: SourceListProps) {
 Run: `npx vitest run && npx tsc --noEmit`
 Expected: all PASS, no type errors.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 7: Create `src/react/index.ts`**
+
+The tsup entry and the `./react` package export both point at this file, so it has
+to exist for the build to succeed. Task 6 extends it with the rest of the surface:
+
+```ts
+// The React surface. Components take an optional renderMarkdown prop and
+// default to plain paragraphs; this package never calls
+// dangerouslySetInnerHTML or bundles a markdown parser.
+export { EvidenceBadge, SourceList } from './evidence'
+export type { EvidenceBadgeProps, SourceListProps } from './evidence'
+export { renderPlainParagraphs } from './markdown'
+export type { RenderMarkdown } from './markdown'
+```
+
+- [ ] **Step 8: Commit**
 
 ```bash
-git add package.json package-lock.json tsconfig.json tsup.config.ts src/react
+git add package.json package-lock.json tsconfig.json tsup.config.ts vitest.config.ts vitest.setup.ts src/react
 git commit -m "add react entry with evidence badge and source list"
 ```
 
@@ -1788,6 +1825,10 @@ export function MythCard({ myth, renderMarkdown = renderPlainParagraphs }: MythC
 ```
 
 - [ ] **Step 4: Write `src/react/index.ts`**
+
+```ts
+Task 3 created this file with the evidence exports only. Replace its contents with
+the full surface:
 
 ```ts
 export { EvidenceBadge, SourceList } from './evidence'
