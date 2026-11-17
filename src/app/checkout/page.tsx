@@ -53,8 +53,28 @@ export default function CheckoutPage() {
   );
 }
 
-function formatPrice(cents: number): string {
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(cents / 100);
+// The pending order for this tab. Sent with the next checkout attempt so the
+// server can release its stock hold after a reload or a failed payment.
+const PENDING_KEY = "pending_checkout";
+
+function readPendingCheckout(): { order_id: number; client_secret: string } | undefined {
+  try {
+    const raw = sessionStorage.getItem(PENDING_KEY);
+    return raw ? JSON.parse(raw) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function rememberPendingCheckout(state: CheckoutState) {
+  try {
+    sessionStorage.setItem(
+      PENDING_KEY,
+      JSON.stringify({ order_id: state.order_id, client_secret: state.client_secret })
+    );
+  } catch {
+    // Storage is unavailable. The hold then simply runs out after 15 minutes.
+  }
 }
 
 function AddressForm({
@@ -86,8 +106,8 @@ function AddressForm({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          previous: readPendingCheckout(),
           items: items.map((i) => ({
-            plant_id: i.plant_id,
             variant_id: i.variant_id,
             quantity: i.quantity,
           })),
@@ -106,6 +126,7 @@ function AddressForm({
       }
 
       const data: CheckoutState = await res.json();
+      rememberPendingCheckout(data);
       onCheckoutReady(data);
     } catch {
       setError("Something went wrong. Please try again.");

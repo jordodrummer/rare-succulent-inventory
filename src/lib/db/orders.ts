@@ -1,5 +1,5 @@
 import { getServiceSupabase } from "../supabase/server";
-import type { Order } from "../types";
+import type { Order, OrderStatus } from "../types";
 
 export async function getOrders(): Promise<Order[]> {
   const supabase = getServiceSupabase();
@@ -46,6 +46,24 @@ export async function updateOrderStatus(id: number, status: string): Promise<Ord
 
   if (error && error.code !== "PGRST116") throw error;
   return data;
+}
+
+/**
+ * Move an order to a new status only if it is still in the expected one.
+ * Returns whether this call made the change, so the webhook and the expiry
+ * cleanup cannot both act on the same order.
+ */
+export async function transitionOrderStatus(id: number, from: OrderStatus, to: OrderStatus): Promise<boolean> {
+  const supabase = getServiceSupabase();
+  const { data, error } = await supabase
+    .from("orders")
+    .update({ status: to, updated_on: new Date().toISOString() })
+    .eq("id", id)
+    .eq("status", from)
+    .select("id");
+
+  if (error) throw error;
+  return (data?.length ?? 0) > 0;
 }
 
 export async function deleteOrder(id: number): Promise<boolean> {
@@ -112,6 +130,7 @@ export async function getOrderByPaymentIntent(paymentIntentId: string): Promise<
 export async function getOrderForConfirmation(id: number): Promise<{
   id: number;
   status: string;
+  stripe_payment_intent_id: string | null;
   guest_name: string | null;
   guest_email: string | null;
   shipping_cost: number | null;
@@ -124,7 +143,7 @@ export async function getOrderForConfirmation(id: number): Promise<{
   const supabase = getServiceSupabase();
   const { data, error } = await supabase
     .from("orders")
-    .select("id, status, guest_name, guest_email, shipping_cost, shipping_address_street, shipping_address_city, shipping_address_state, shipping_address_zip, created_on")
+    .select("id, status, stripe_payment_intent_id, guest_name, guest_email, shipping_cost, shipping_address_street, shipping_address_city, shipping_address_state, shipping_address_zip, created_on")
     .eq("id", id)
     .single();
 

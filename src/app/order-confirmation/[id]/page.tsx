@@ -3,21 +3,57 @@ import ClearCartOnMount from "./clear-cart";
 import { notFound } from "next/navigation";
 import { getOrderForConfirmation } from "@/lib/db/orders";
 import { getOrderItems } from "@/lib/db/order-items";
+import { expireOrder } from "@/lib/db/reservations";
 import { getServiceSupabase } from "@/lib/supabase/server";
+import { dollarsToCents } from "@/lib/money";
+import { getPaymentIntentForSecret } from "@/lib/stripe/order-access";
 import { Button } from "@/components/ui/button";
 
 function formatPrice(cents: number): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(cents / 100);
 }
 
-export default async function OrderConfirmationPage({ params }: { params: Promise<{ id: string }> }) {
+type Props = {
+  params: Promise<{ id: string }>;
+  searchParams: Promise<{ payment_intent_client_secret?: string | string[] }>;
+};
+
+export default async function OrderConfirmationPage({ params, searchParams }: Props) {
   const { id } = await params;
   const orderId = Number(id);
-  if (isNaN(orderId)) notFound();
+  if (!Number.isInteger(orderId)) notFound();
 
+  // Stripe adds the client secret to the return URL. Without it this page
+  // would show a name, email and address to anyone who guesses an order id.
+  const { payment_intent_client_secret: clientSecret } = await searchParams;
   const order = await getOrderForConfirmation(orderId);
-  if (!order || (order.status !== "confirmed" && order.status !== "pending_payment")) {
-    notFound();
+  const paymentIntent = order
+    ? await getPaymentIntentForSecret(order.stripe_payment_intent_id, clientSecret)
+    : null;
+  if (!order || !paymentIntent) notFound();
+
+  const paid = paymentIntent.status === "succeeded";
+  if (!paid && paymentIntent.status !== "processing") {
+    // The order still holds its stock. Expire it now, otherwise the customer's
+    // retry from the cart is refused because of their own hold.
+    if (paymentIntent.status === "requires_payment_method" || paymentIntent.status === "canceled") {
+      try {
+        await expireOrder(order);
+      } catch (err) {
+        console.error(`Could not release order ${order.id} after a failed payment:`, err);
+      }
+    }
+    return (
+      <div className="max-w-lg mx-auto py-16 text-center">
+        <h1 className="text-3xl font-bold mb-2">Payment not completed</h1>
+        <p className="text-muted-foreground mb-8">
+          Your payment did not go through and you have not been charged. Your cart is still saved.
+        </p>
+        <Button render={<Link href="/cart" />} variant="outline">
+          Back to Cart
+        </Button>
+      </div>
+    );
   }
 
   const items = await getOrderItems(orderId);
@@ -32,16 +68,19 @@ export default async function OrderConfirmationPage({ params }: { params: Promis
 
   const plantMap = new Map((plants ?? []).map((p) => [p.id, p.cultivar_name]));
 
-  const itemsTotal = items.reduce((sum, i) => sum + i.price_each * i.quantity, 0);
+  const itemsTotal = items.reduce((sum, i) => sum + dollarsToCents(i.price_each) * i.quantity, 0);
   const shippingCost = order.shipping_cost ?? 0;
   const total = itemsTotal + shippingCost;
 
   return (
     <div className="max-w-lg mx-auto py-16 text-center">
       <ClearCartOnMount />
-      <h1 className="text-3xl font-bold mb-2">Order Confirmed!</h1>
+      <h1 className="text-3xl font-bold mb-2">{paid ? "Order Confirmed!" : "Payment Processing"}</h1>
       <p className="text-muted-foreground mb-8">
-        Thank you{order.guest_name ? `, ${order.guest_name}` : ""}. Your order #{order.id} has been placed.
+        Thank you{order.guest_name ? `, ${order.guest_name}` : ""}.{" "}
+        {paid
+          ? `Your order #${order.id} has been placed.`
+          : `Your order #${order.id} will be confirmed as soon as your payment clears.`}
       </p>
 
       <div className="rounded-lg border p-6 text-left space-y-4 mb-8">
@@ -52,7 +91,7 @@ export default async function OrderConfirmationPage({ params }: { params: Promis
               <span>
                 {plantMap.get(item.plant_id) ?? "Unknown"} x{item.quantity}
               </span>
-              <span>{formatPrice(item.price_each * item.quantity)}</span>
+              <span>{formatPrice(dollarsToCents(item.price_each) * item.quantity)}</span>
             </div>
           ))}
         </div>
