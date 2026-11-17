@@ -94,17 +94,6 @@ export async function POST(request: Request) {
       }
     }
 
-    // Reserve inventory
-    const reserved = await reserveInventory(
-      items.map((i) => ({ variant_id: i.variant_id, quantity: i.quantity }))
-    );
-    if (!reserved) {
-      return NextResponse.json(
-        { error: "Could not reserve inventory. Some items may no longer be available." },
-        { status: 409 }
-      );
-    }
-
     // Calculate item total in cents (server-side, from DB prices in dollars)
     let itemsTotal = 0;
     for (const item of items) {
@@ -133,12 +122,29 @@ export async function POST(request: Request) {
 
       const configs = await getShippingConfig();
       const shippingResult = await calculateShipping(cartVariants, configs, shipping_address!.zip);
+      if (shippingResult.quoteFailed) {
+        return NextResponse.json(
+          { error: "We could not get a shipping rate right now. Please try again." },
+          { status: 503 }
+        );
+      }
       shippingCost = shippingResult.total;
       shippingBreakdown = shippingResult.breakdown;
     }
 
     // Total in cents
     const totalAmount = itemsTotal + shippingCost;
+
+    // Reserve inventory only now, so a failed quote above never leaves a hold
+    const reserved = await reserveInventory(
+      items.map((i) => ({ variant_id: i.variant_id, quantity: i.quantity }))
+    );
+    if (!reserved) {
+      return NextResponse.json(
+        { error: "Could not reserve inventory. Some items may no longer be available." },
+        { status: 409 }
+      );
+    }
 
     // Create Stripe PaymentIntent
     const stripe = getStripe();

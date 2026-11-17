@@ -18,6 +18,9 @@ type ShippingBreakdown = {
 type ShippingResult = {
   breakdown: ShippingBreakdown[];
   total: number;
+  // True when a real-time rate was needed but could not be obtained. The
+  // total then leaves that part out, so it must not be charged as is.
+  quoteFailed: boolean;
 };
 
 const DEFAULT_WEIGHT_OZ = 8;
@@ -29,6 +32,7 @@ export async function calculateShipping(
 ): Promise<ShippingResult> {
   const configMap = new Map(configs.map((c) => [c.variant_type, c]));
   const breakdown: ShippingBreakdown[] = [];
+  let quoteFailed = false;
 
   // Items with shipping_override pay their override amount
   const overrideItems = items.filter((i) => i.shipping_override != null);
@@ -82,6 +86,7 @@ export async function calculateShipping(
 
     const originZip = process.env.ORIGIN_ZIP;
     if (!originZip) {
+      quoteFailed = true;
       breakdown.push({ description: "Real-time shipping (origin ZIP not configured)", amount: 0 });
     } else {
       try {
@@ -99,14 +104,16 @@ export async function calculateShipping(
             amount: cheapest.rate,
           });
         } else {
+          quoteFailed = true;
           breakdown.push({ description: "No USPS rates available", amount: 0 });
         }
       } catch {
+        quoteFailed = true;
         breakdown.push({ description: "Real-time rates unavailable, please try again", amount: 0 });
       }
     }
   }
 
   const total = breakdown.reduce((sum, b) => sum + b.amount, 0);
-  return { breakdown, total };
+  return { breakdown, total, quoteFailed };
 }

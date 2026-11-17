@@ -63,6 +63,12 @@ export async function POST(request: Request) {
 
     const configs = await getShippingConfig();
     const shippingResult = await calculateShipping(cartVariants, configs, shipping_address.zip);
+    if (shippingResult.quoteFailed) {
+      return NextResponse.json(
+        { error: "We could not get a shipping rate right now. Please try again." },
+        { status: 503 }
+      );
+    }
     const shippingCost = shippingResult.total;
 
     const itemsTotal = orderItems.reduce((sum, i) => sum + dollarsToCents(i.price_each) * i.quantity, 0);
