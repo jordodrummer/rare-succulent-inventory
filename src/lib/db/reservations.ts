@@ -1,4 +1,5 @@
 import { getServiceSupabase } from "../supabase/server";
+import Stripe from "stripe";
 import { getStripe } from "../stripe/client";
 import type { Order } from "../types";
 import { getOrderItems } from "./order-items";
@@ -92,15 +93,30 @@ export async function confirmReservation(orderId: number): Promise<void> {
   }
 }
 
-/**
- * Expire one overdue pending order: cancel its PaymentIntent so it can no
- * longer be paid, then release its stock. Returns whether it was expired.
- */
-async function expireOrder(order: Order): Promise<boolean> {
-  if (order.stripe_payment_intent_id) {
-    const stripe = getStripe();
-    const paymentIntent = await stripe.paymentIntents.retrieve(order.stripe_payment_intent_id);
+// A live key cannot see a test-mode PaymentIntent, which is what a checkout
+// started from local dev against the same database leaves behind. No real
+// money can be taken on it, so its stock can be released without a cancel.
+// A test key that cannot see a live PaymentIntent must leave the order alone.
+function isUnseenTestIntent(err: unknown): boolean {
+  const liveKey = /^(sk|rk)_live_/.test(process.env.STRIPE_SECRET_KEY ?? "");
+  return liveKey && err instanceof Stripe.errors.StripeError && err.code === "resource_missing";
+}
 
+/**
+ * Expire one pending order: cancel its PaymentIntent so it can no longer be
+ * paid, then release its stock. Returns whether it was expired.
+ */
+export async function expireOrder(order: Pick<Order, "id" | "stripe_payment_intent_id">): Promise<boolean> {
+  let paymentIntent: Stripe.PaymentIntent | null = null;
+  if (order.stripe_payment_intent_id) {
+    try {
+      paymentIntent = await getStripe().paymentIntents.retrieve(order.stripe_payment_intent_id);
+    } catch (err) {
+      if (!isUnseenTestIntent(err)) throw err;
+    }
+  }
+
+  if (paymentIntent) {
     if (paymentIntent.status === "succeeded") {
       // Paid, but the webhook has not confirmed it. Confirm it here instead
       // of expiring an order the customer was charged for.
@@ -116,7 +132,7 @@ async function expireOrder(order: Order): Promise<boolean> {
     if (paymentIntent.status !== "canceled") {
       // Throws if the payment went through in the meantime, which leaves the
       // order pending for the webhook.
-      await stripe.paymentIntents.cancel(paymentIntent.id);
+      await getStripe().paymentIntents.cancel(paymentIntent.id);
     }
   }
 
@@ -128,13 +144,17 @@ async function expireOrder(order: Order): Promise<boolean> {
 }
 
 /**
- * Find and release all expired pending_payment orders.
+ * Find and release expired pending_payment orders. With a budget it stops
+ * starting new orders once the time is used up and leaves the rest to the
+ * next run, so a caller on a request path is not held up by a backlog.
  */
-export async function cleanupExpiredReservations(): Promise<number> {
+export async function cleanupExpiredReservations(budgetMs?: number): Promise<number> {
+  const deadline = budgetMs === undefined ? Infinity : Date.now() + budgetMs;
   const expired = await getExpiredPendingOrders();
   let cleaned = 0;
 
   for (const order of expired) {
+    if (Date.now() > deadline) break;
     try {
       if (await expireOrder(order)) cleaned++;
     } catch (err) {

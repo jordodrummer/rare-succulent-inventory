@@ -36,6 +36,22 @@ export async function createOrderItem(
   return data;
 }
 
+/**
+ * Insert all of an order's items in one statement, so the order ends up with
+ * every item or none.
+ */
+export async function createOrderItems(
+  orderId: number,
+  items: { plant_id: number; variant_id: number; price_each: number; quantity: number }[]
+): Promise<void> {
+  const supabase = getServiceSupabase();
+  const { error } = await supabase
+    .from("order_details")
+    .insert(items.map((item) => ({ order_id: orderId, ...item })));
+
+  if (error) throw error;
+}
+
 export async function deleteOrderItem(id: number): Promise<boolean> {
   const supabase = getServiceSupabase();
   const { error, count } = await supabase

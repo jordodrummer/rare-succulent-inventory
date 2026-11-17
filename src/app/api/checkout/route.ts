@@ -4,7 +4,7 @@ import { getServiceSupabase } from "@/lib/supabase/server";
 import { getShippingConfig } from "@/lib/db/shipping";
 import { calculateShipping } from "@/lib/shipping/calculator";
 import { createCheckoutOrder, updateOrderStatus } from "@/lib/db/orders";
-import { createOrderItem } from "@/lib/db/order-items";
+import { createOrderItems } from "@/lib/db/order-items";
 import { cleanupExpiredReservations, releaseItems, reserveInventory } from "@/lib/db/reservations";
 import { dollarsToCents } from "@/lib/money";
 
@@ -26,9 +26,14 @@ type CheckoutBody = {
   };
 };
 
-// Give back everything a failed checkout took: the stock holds, the order row
-// and the PaymentIntent. Each step is independent so one failure does not
-// strand the rest.
+// Checkout makes several Stripe, Shippo and Supabase calls in a row. Give it
+// room so the platform never kills it while stock is held.
+export const maxDuration = 60;
+
+// Give back everything a failed checkout took. Items are inserted in one
+// statement and nothing can fail after that, so an order that reaches this
+// point has no items for the expiry cleanup to release: the holds have to be
+// released here. Each step is independent so one failure does not strand the rest.
 async function undoCheckout(
   holds: { variant_id: number; quantity: number }[],
   paymentIntentId: string | null,
@@ -38,10 +43,7 @@ async function undoCheckout(
     try {
       await updateOrderStatus(orderId, "expired");
     } catch (err) {
-      // The order is still pending, so the expiry cleanup will release its
-      // items later. Releasing here as well would release them twice.
       console.error(`Could not expire order ${orderId} after a failed checkout:`, err);
-      return;
     }
   }
 
@@ -95,9 +97,10 @@ export async function POST(request: Request) {
     }
 
     // The Vercel cron only runs once a day, so release stock held by abandoned
-    // checkouts here, right before availability is checked.
+    // checkouts here, right before availability is checked. The budget keeps a
+    // backlog from holding up this customer.
     try {
-      await cleanupExpiredReservations();
+      await cleanupExpiredReservations(4000);
     } catch (err) {
       console.error("Reservation cleanup failed:", err);
     }
@@ -169,6 +172,9 @@ export async function POST(request: Request) {
     // Total in cents
     const totalAmount = itemsTotal + shippingCost;
 
+    // Fails here, before any stock is held, if Stripe is not configured.
+    const stripe = getStripe();
+
     // Reserve inventory only now, so a failed quote above never leaves a hold
     const holds = items.map((i) => ({ variant_id: i.variant_id, quantity: i.quantity }));
     const reserved = await reserveInventory(holds);
@@ -180,7 +186,6 @@ export async function POST(request: Request) {
     }
 
     // From here on stock is held, so any failure has to give it back.
-    const stripe = getStripe();
     let paymentIntentId: string | null = null;
     let orderId: number | null = null;
 
@@ -210,10 +215,18 @@ export async function POST(request: Request) {
       });
       orderId = order.id;
 
-      for (const item of items) {
-        const variant = variantMap.get(item.variant_id)!;
-        await createOrderItem(order.id, variant.plant_id, item.variant_id, variant.price, item.quantity);
-      }
+      await createOrderItems(
+        order.id,
+        items.map((item) => {
+          const variant = variantMap.get(item.variant_id)!;
+          return {
+            plant_id: variant.plant_id,
+            variant_id: item.variant_id,
+            price_each: variant.price,
+            quantity: item.quantity,
+          };
+        })
+      );
 
       return NextResponse.json({
         client_secret: paymentIntent.client_secret,
