@@ -6,6 +6,7 @@ import { calculateShipping } from "@/lib/shipping/calculator";
 import { createCheckoutOrder } from "@/lib/db/orders";
 import { createOrderItem } from "@/lib/db/order-items";
 import { cleanupExpiredReservations, reserveInventory } from "@/lib/db/reservations";
+import { dollarsToCents } from "@/lib/money";
 
 type CheckoutItem = {
   plant_id: number;
@@ -92,11 +93,11 @@ export async function POST(request: Request) {
       );
     }
 
-    // Calculate item total (server-side, from DB prices)
+    // Calculate item total in cents (server-side, from DB prices in dollars)
     let itemsTotal = 0;
     for (const item of items) {
       const variant = variantMap.get(item.variant_id)!;
-      itemsTotal += variant.price * item.quantity;
+      itemsTotal += dollarsToCents(variant.price) * item.quantity;
     }
 
     // Calculate shipping (free for local pickup)

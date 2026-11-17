@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { getOrderForConfirmation } from "@/lib/db/orders";
 import { getOrderItems } from "@/lib/db/order-items";
 import { getServiceSupabase } from "@/lib/supabase/server";
+import { dollarsToCents } from "@/lib/money";
 import { Button } from "@/components/ui/button";
 
 function formatPrice(cents: number): string {
@@ -32,7 +33,7 @@ export default async function OrderConfirmationPage({ params }: { params: Promis
 
   const plantMap = new Map((plants ?? []).map((p) => [p.id, p.cultivar_name]));
 
-  const itemsTotal = items.reduce((sum, i) => sum + i.price_each * i.quantity, 0);
+  const itemsTotal = items.reduce((sum, i) => sum + dollarsToCents(i.price_each) * i.quantity, 0);
   const shippingCost = order.shipping_cost ?? 0;
   const total = itemsTotal + shippingCost;
 
@@ -52,7 +53,7 @@ export default async function OrderConfirmationPage({ params }: { params: Promis
               <span>
                 {plantMap.get(item.plant_id) ?? "Unknown"} x{item.quantity}
               </span>
-              <span>{formatPrice(item.price_each * item.quantity)}</span>
+              <span>{formatPrice(dollarsToCents(item.price_each) * item.quantity)}</span>
             </div>
           ))}
         </div>

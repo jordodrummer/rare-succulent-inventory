@@ -5,6 +5,7 @@ import { getShippingConfig } from "@/lib/db/shipping";
 import { calculateShipping } from "@/lib/shipping/calculator";
 import { getOrderById } from "@/lib/db/orders";
 import { getOrderItems } from "@/lib/db/order-items";
+import { dollarsToCents } from "@/lib/money";
 
 type UpdateBody = {
   order_id: number;
@@ -64,7 +65,7 @@ export async function POST(request: Request) {
     const shippingResult = await calculateShipping(cartVariants, configs, shipping_address.zip);
     const shippingCost = shippingResult.total;
 
-    const itemsTotal = orderItems.reduce((sum, i) => sum + i.price_each * i.quantity, 0);
+    const itemsTotal = orderItems.reduce((sum, i) => sum + dollarsToCents(i.price_each) * i.quantity, 0);
     const totalAmount = itemsTotal + shippingCost;
 
     const stripe = getStripe();
