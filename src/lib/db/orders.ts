@@ -130,6 +130,7 @@ export async function getOrderByPaymentIntent(paymentIntentId: string): Promise<
 export async function getOrderForConfirmation(id: number): Promise<{
   id: number;
   status: string;
+  stripe_payment_intent_id: string | null;
   guest_name: string | null;
   guest_email: string | null;
   shipping_cost: number | null;
@@ -142,7 +143,7 @@ export async function getOrderForConfirmation(id: number): Promise<{
   const supabase = getServiceSupabase();
   const { data, error } = await supabase
     .from("orders")
-    .select("id, status, guest_name, guest_email, shipping_cost, shipping_address_street, shipping_address_city, shipping_address_state, shipping_address_zip, created_on")
+    .select("id, status, stripe_payment_intent_id, guest_name, guest_email, shipping_cost, shipping_address_street, shipping_address_city, shipping_address_state, shipping_address_zip, created_on")
     .eq("id", id)
     .single();
 

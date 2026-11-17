@@ -6,9 +6,11 @@ import { calculateShipping } from "@/lib/shipping/calculator";
 import { getOrderById } from "@/lib/db/orders";
 import { getOrderItems } from "@/lib/db/order-items";
 import { dollarsToCents } from "@/lib/money";
+import { getPaymentIntentForSecret } from "@/lib/stripe/order-access";
 
 type UpdateBody = {
   order_id: number;
+  client_secret: string;
   shipping_address: {
     street: string;
     city: string;
@@ -20,9 +22,9 @@ type UpdateBody = {
 export async function POST(request: Request) {
   try {
     const body: UpdateBody = await request.json();
-    const { order_id, shipping_address } = body;
+    const { order_id, client_secret, shipping_address } = body;
 
-    if (!order_id || !shipping_address?.zip) {
+    if (!Number.isInteger(order_id) || !shipping_address?.zip) {
       return NextResponse.json({ error: "order_id and shipping_address are required" }, { status: 400 });
     }
     if (!/^\d{5}$/.test(shipping_address.zip)) {
@@ -31,6 +33,10 @@ export async function POST(request: Request) {
 
     const order = await getOrderById(order_id);
     if (!order || order.status !== "pending_payment") {
+      return NextResponse.json({ error: "Order not found or not pending" }, { status: 404 });
+    }
+    // Only the browser that started this checkout may change the order.
+    if (!(await getPaymentIntentForSecret(order.stripe_payment_intent_id, client_secret))) {
       return NextResponse.json({ error: "Order not found or not pending" }, { status: 404 });
     }
 
