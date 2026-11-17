@@ -1,6 +1,8 @@
 import { getServiceSupabase } from "../supabase/server";
+import { getStripe } from "../stripe/client";
+import type { Order } from "../types";
 import { getOrderItems } from "./order-items";
-import { getExpiredPendingOrders, updateOrderStatus } from "./orders";
+import { getExpiredPendingOrders, transitionOrderStatus } from "./orders";
 
 type ReservationItem = {
   variant_id: number;
@@ -62,17 +64,12 @@ export async function releaseItems(items: ReservationItem[]): Promise<void> {
  * Release reserved inventory for an order's items.
  */
 export async function releaseReservation(orderId: number): Promise<void> {
-  const supabase = getServiceSupabase();
   const items = await getOrderItems(orderId);
-
-  for (const item of items) {
-    if (item.variant_id) {
-      await supabase.rpc("release_variant", {
-        p_variant_id: item.variant_id,
-        p_quantity: item.quantity,
-      });
-    }
-  }
+  await releaseItems(
+    items
+      .filter((item) => item.variant_id !== null)
+      .map((item) => ({ variant_id: item.variant_id!, quantity: item.quantity }))
+  );
 }
 
 /**
@@ -84,12 +81,50 @@ export async function confirmReservation(orderId: number): Promise<void> {
 
   for (const item of items) {
     if (item.variant_id) {
-      await supabase.rpc("confirm_variant_sale", {
+      const { error } = await supabase.rpc("confirm_variant_sale", {
         p_variant_id: item.variant_id,
         p_quantity: item.quantity,
       });
+      if (error) {
+        console.error(`Could not record the sale of variant ${item.variant_id} for order ${orderId}:`, error);
+      }
     }
   }
+}
+
+/**
+ * Expire one overdue pending order: cancel its PaymentIntent so it can no
+ * longer be paid, then release its stock. Returns whether it was expired.
+ */
+async function expireOrder(order: Order): Promise<boolean> {
+  if (order.stripe_payment_intent_id) {
+    const stripe = getStripe();
+    const paymentIntent = await stripe.paymentIntents.retrieve(order.stripe_payment_intent_id);
+
+    if (paymentIntent.status === "succeeded") {
+      // Paid, but the webhook has not confirmed it. Confirm it here instead
+      // of expiring an order the customer was charged for.
+      if (await transitionOrderStatus(order.id, "pending_payment", "confirmed")) {
+        await confirmReservation(order.id);
+      }
+      return false;
+    }
+    if (paymentIntent.status === "processing" || paymentIntent.status === "requires_capture") {
+      // Payment is in flight. Leave the order for the webhook or the next run.
+      return false;
+    }
+    if (paymentIntent.status !== "canceled") {
+      // Throws if the payment went through in the meantime, which leaves the
+      // order pending for the webhook.
+      await stripe.paymentIntents.cancel(paymentIntent.id);
+    }
+  }
+
+  if (!(await transitionOrderStatus(order.id, "pending_payment", "expired"))) {
+    return false;
+  }
+  await releaseReservation(order.id);
+  return true;
 }
 
 /**
@@ -100,9 +135,11 @@ export async function cleanupExpiredReservations(): Promise<number> {
   let cleaned = 0;
 
   for (const order of expired) {
-    await releaseReservation(order.id);
-    await updateOrderStatus(order.id, "expired");
-    cleaned++;
+    try {
+      if (await expireOrder(order)) cleaned++;
+    } catch (err) {
+      console.error(`Could not expire order ${order.id}:`, err);
+    }
   }
 
   return cleaned;

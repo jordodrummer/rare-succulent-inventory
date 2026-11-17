@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import Stripe from "stripe";
 import { getStripe } from "@/lib/stripe/client";
-import { getOrderByPaymentIntent, updateOrderStatus } from "@/lib/db/orders";
-import { confirmReservation, releaseReservation } from "@/lib/db/reservations";
+import { getOrderByPaymentIntent, transitionOrderStatus } from "@/lib/db/orders";
+import { confirmReservation } from "@/lib/db/reservations";
 
 export async function POST(request: Request) {
   const body = await request.text();
@@ -26,37 +26,25 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid signature" }, { status: 400 });
   }
 
-  switch (event.type) {
-    case "payment_intent.succeeded": {
-      const paymentIntent = event.data.object as Stripe.PaymentIntent;
-      const order = await getOrderByPaymentIntent(paymentIntent.id);
+  // payment_intent.payment_failed is deliberately not handled: a declined card
+  // leaves the PaymentIntent payable, so the order stays pending and the
+  // customer can retry until it expires.
+  if (event.type === "payment_intent.succeeded") {
+    const paymentIntent = event.data.object as Stripe.PaymentIntent;
+    const order = await getOrderByPaymentIntent(paymentIntent.id);
 
-      if (!order) {
-        console.error("No order found for PaymentIntent:", paymentIntent.id);
-        break;
-      }
-
-      if (order.status !== "pending_payment") {
-        // Already processed (idempotent)
-        break;
-      }
-
-      // Confirm the sale: decrement inventory and reserved
+    if (!order) {
+      console.error("No order found for PaymentIntent:", paymentIntent.id);
+    } else if (order.status === "expired") {
+      // Expiry cancels the PaymentIntent first, so this should not happen.
+      // If it does, money was taken for an order whose stock was released.
+      console.error(
+        `PaymentIntent ${paymentIntent.id} succeeded for expired order ${order.id}. Refund or fulfil it by hand.`
+      );
+    } else if (await transitionOrderStatus(order.id, "pending_payment", "confirmed")) {
+      // Only the call that wins the status change records the sale, so a
+      // redelivered event cannot decrement inventory twice.
       await confirmReservation(order.id);
-      await updateOrderStatus(order.id, "confirmed");
-      break;
-    }
-
-    case "payment_intent.payment_failed": {
-      const paymentIntent = event.data.object as Stripe.PaymentIntent;
-      const order = await getOrderByPaymentIntent(paymentIntent.id);
-
-      if (!order || order.status !== "pending_payment") break;
-
-      // Release reservation and expire the order
-      await releaseReservation(order.id);
-      await updateOrderStatus(order.id, "expired");
-      break;
     }
   }
 
