@@ -40,6 +40,25 @@ export async function reserveInventory(items: ReservationItem[]): Promise<boolea
 }
 
 /**
+ * Release holds by item list. Used when checkout fails after reserving but
+ * before the order and all of its items exist, so there is no complete order
+ * to release from.
+ */
+export async function releaseItems(items: ReservationItem[]): Promise<void> {
+  const supabase = getServiceSupabase();
+
+  for (const item of items) {
+    const { error } = await supabase.rpc("release_variant", {
+      p_variant_id: item.variant_id,
+      p_quantity: item.quantity,
+    });
+    if (error) {
+      console.error(`Could not release ${item.quantity} of variant ${item.variant_id}:`, error);
+    }
+  }
+}
+
+/**
  * Release reserved inventory for an order's items.
  */
 export async function releaseReservation(orderId: number): Promise<void> {

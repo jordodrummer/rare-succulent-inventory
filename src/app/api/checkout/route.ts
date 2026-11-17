@@ -3,9 +3,9 @@ import { getStripe } from "@/lib/stripe/client";
 import { getServiceSupabase } from "@/lib/supabase/server";
 import { getShippingConfig } from "@/lib/db/shipping";
 import { calculateShipping } from "@/lib/shipping/calculator";
-import { createCheckoutOrder } from "@/lib/db/orders";
+import { createCheckoutOrder, updateOrderStatus } from "@/lib/db/orders";
 import { createOrderItem } from "@/lib/db/order-items";
-import { cleanupExpiredReservations, reserveInventory } from "@/lib/db/reservations";
+import { cleanupExpiredReservations, releaseItems, reserveInventory } from "@/lib/db/reservations";
 import { dollarsToCents } from "@/lib/money";
 
 type CheckoutItem = {
@@ -25,6 +25,40 @@ type CheckoutBody = {
     zip: string;
   };
 };
+
+// Give back everything a failed checkout took: the stock holds, the order row
+// and the PaymentIntent. Each step is independent so one failure does not
+// strand the rest.
+async function undoCheckout(
+  holds: { variant_id: number; quantity: number }[],
+  paymentIntentId: string | null,
+  orderId: number | null
+) {
+  if (orderId !== null) {
+    try {
+      await updateOrderStatus(orderId, "expired");
+    } catch (err) {
+      // The order is still pending, so the expiry cleanup will release its
+      // items later. Releasing here as well would release them twice.
+      console.error(`Could not expire order ${orderId} after a failed checkout:`, err);
+      return;
+    }
+  }
+
+  try {
+    await releaseItems(holds);
+  } catch (err) {
+    console.error("Could not release stock after a failed checkout:", err);
+  }
+
+  if (paymentIntentId !== null) {
+    try {
+      await getStripe().paymentIntents.cancel(paymentIntentId);
+    } catch (err) {
+      console.error(`Could not cancel PaymentIntent ${paymentIntentId}:`, err);
+    }
+  }
+}
 
 export async function POST(request: Request) {
   try {
@@ -136,9 +170,8 @@ export async function POST(request: Request) {
     const totalAmount = itemsTotal + shippingCost;
 
     // Reserve inventory only now, so a failed quote above never leaves a hold
-    const reserved = await reserveInventory(
-      items.map((i) => ({ variant_id: i.variant_id, quantity: i.quantity }))
-    );
+    const holds = items.map((i) => ({ variant_id: i.variant_id, quantity: i.quantity }));
+    const reserved = await reserveInventory(holds);
     if (!reserved) {
       return NextResponse.json(
         { error: "Could not reserve inventory. Some items may no longer be available." },
@@ -146,46 +179,54 @@ export async function POST(request: Request) {
       );
     }
 
-    // Create Stripe PaymentIntent
+    // From here on stock is held, so any failure has to give it back.
     const stripe = getStripe();
-    const paymentIntent = await stripe.paymentIntents.create({
-      amount: totalAmount,
-      currency: "usd",
-      receipt_email: guest_email,
-      metadata: {
+    let paymentIntentId: string | null = null;
+    let orderId: number | null = null;
+
+    try {
+      const paymentIntent = await stripe.paymentIntents.create({
+        amount: totalAmount,
+        currency: "usd",
+        receipt_email: guest_email,
+        metadata: {
+          guest_name,
+          guest_email,
+        },
+      });
+      paymentIntentId = paymentIntent.id;
+
+      const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+      const order = await createCheckoutOrder({
         guest_name,
         guest_email,
-      },
-    });
+        stripe_payment_intent_id: paymentIntent.id,
+        shipping_cost: shippingCost,
+        expires_at: expiresAt,
+        shipping_address_street: shipping_address?.street ?? "",
+        shipping_address_city: shipping_address?.city ?? "",
+        shipping_address_state: shipping_address?.state ?? "",
+        shipping_address_zip: shipping_address?.zip ?? "",
+      });
+      orderId = order.id;
 
-    // Create order
-    const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
-    const order = await createCheckoutOrder({
-      guest_name,
-      guest_email,
-      stripe_payment_intent_id: paymentIntent.id,
-      shipping_cost: shippingCost,
-      expires_at: expiresAt,
-      shipping_address_street: shipping_address?.street ?? "",
-      shipping_address_city: shipping_address?.city ?? "",
-      shipping_address_state: shipping_address?.state ?? "",
-      shipping_address_zip: shipping_address?.zip ?? "",
-    });
+      for (const item of items) {
+        const variant = variantMap.get(item.variant_id)!;
+        await createOrderItem(order.id, variant.plant_id, item.variant_id, variant.price, item.quantity);
+      }
 
-    // Create order items
-    for (const item of items) {
-      const variant = variantMap.get(item.variant_id)!;
-      await createOrderItem(order.id, variant.plant_id, item.variant_id, variant.price, item.quantity);
+      return NextResponse.json({
+        client_secret: paymentIntent.client_secret,
+        order_id: order.id,
+        items_total: itemsTotal,
+        shipping_cost: shippingCost,
+        total: totalAmount,
+        shipping_breakdown: shippingBreakdown,
+      });
+    } catch (err) {
+      await undoCheckout(holds, paymentIntentId, orderId);
+      throw err;
     }
-
-    return NextResponse.json({
-      client_secret: paymentIntent.client_secret,
-      order_id: order.id,
-      items_total: itemsTotal,
-      shipping_cost: shippingCost,
-      total: totalAmount,
-      shipping_breakdown: shippingBreakdown,
-    });
   } catch (err) {
     console.error("Checkout error:", err);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
