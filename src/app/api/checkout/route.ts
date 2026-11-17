@@ -5,7 +5,7 @@ import { getShippingConfig } from "@/lib/db/shipping";
 import { calculateShipping } from "@/lib/shipping/calculator";
 import { createCheckoutOrder } from "@/lib/db/orders";
 import { createOrderItem } from "@/lib/db/order-items";
-import { reserveInventory } from "@/lib/db/reservations";
+import { cleanupExpiredReservations, reserveInventory } from "@/lib/db/reservations";
 
 type CheckoutItem = {
   plant_id: number;
@@ -45,6 +45,14 @@ export async function POST(request: Request) {
       if (!/^\d{5}$/.test(shipping_address.zip)) {
         return NextResponse.json({ error: "Invalid ZIP code" }, { status: 400 });
       }
+    }
+
+    // The Vercel cron only runs once a day, so release stock held by abandoned
+    // checkouts here, right before availability is checked.
+    try {
+      await cleanupExpiredReservations();
+    } catch (err) {
+      console.error("Reservation cleanup failed:", err);
     }
 
     // Fetch variant details for price verification and shipping calc
