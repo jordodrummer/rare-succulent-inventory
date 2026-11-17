@@ -3,6 +3,7 @@ import ClearCartOnMount from "./clear-cart";
 import { notFound } from "next/navigation";
 import { getOrderForConfirmation } from "@/lib/db/orders";
 import { getOrderItems } from "@/lib/db/order-items";
+import { expireOrder } from "@/lib/db/reservations";
 import { getServiceSupabase } from "@/lib/supabase/server";
 import { dollarsToCents } from "@/lib/money";
 import { getPaymentIntentForSecret } from "@/lib/stripe/order-access";
@@ -33,6 +34,15 @@ export default async function OrderConfirmationPage({ params, searchParams }: Pr
 
   const paid = paymentIntent.status === "succeeded";
   if (!paid && paymentIntent.status !== "processing") {
+    // The order still holds its stock. Expire it now, otherwise the customer's
+    // retry from the cart is refused because of their own hold.
+    if (paymentIntent.status === "requires_payment_method" || paymentIntent.status === "canceled") {
+      try {
+        await expireOrder(order);
+      } catch (err) {
+        console.error(`Could not release order ${order.id} after a failed payment:`, err);
+      }
+    }
     return (
       <div className="max-w-lg mx-auto py-16 text-center">
         <h1 className="text-3xl font-bold mb-2">Payment not completed</h1>

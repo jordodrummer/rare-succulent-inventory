@@ -3,18 +3,25 @@ import { getStripe } from "@/lib/stripe/client";
 import { getServiceSupabase } from "@/lib/supabase/server";
 import { getShippingConfig } from "@/lib/db/shipping";
 import { calculateShipping } from "@/lib/shipping/calculator";
-import { createCheckoutOrder, updateOrderStatus } from "@/lib/db/orders";
+import { createCheckoutOrder, getOrderById, updateOrderStatus } from "@/lib/db/orders";
 import { createOrderItems } from "@/lib/db/order-items";
-import { cleanupExpiredReservations, releaseItems, reserveInventory } from "@/lib/db/reservations";
+import { cleanupExpiredReservations, expireOrder, releaseItems, reserveInventory } from "@/lib/db/reservations";
 import { dollarsToCents } from "@/lib/money";
+import { getPaymentIntentForSecret } from "@/lib/stripe/order-access";
 
 type CheckoutItem = {
   variant_id: number;
   quantity: number;
 };
 
+type PreviousCheckout = {
+  order_id: number;
+  client_secret: string;
+};
+
 type CheckoutBody = {
   items: CheckoutItem[];
+  previous?: PreviousCheckout;
   guest_name: string;
   guest_email: string;
   shipping_method?: "ship" | "pickup";
@@ -29,6 +36,21 @@ type CheckoutBody = {
 // Checkout makes several Stripe, Shippo and Supabase calls in a row. Give it
 // room so the platform never kills it while stock is held.
 export const maxDuration = 60;
+
+// A customer who reloads or comes back from the payment step still holds stock
+// under their earlier order. Expire that order so they are not blocked by
+// their own hold. The client secret proves the order is theirs.
+async function releasePreviousCheckout(previous: PreviousCheckout) {
+  try {
+    if (!Number.isInteger(previous?.order_id)) return;
+    const order = await getOrderById(previous.order_id);
+    if (!order || order.status !== "pending_payment") return;
+    if (!(await getPaymentIntentForSecret(order.stripe_payment_intent_id, previous.client_secret))) return;
+    await expireOrder(order);
+  } catch (err) {
+    console.error("Could not release the previous checkout:", err);
+  }
+}
 
 // Give back everything a failed checkout took. Items are inserted in one
 // statement and nothing can fail after that, so an order that reaches this
@@ -94,6 +116,10 @@ export async function POST(request: Request) {
       if (!/^\d{5}$/.test(shipping_address.zip)) {
         return NextResponse.json({ error: "Invalid ZIP code" }, { status: 400 });
       }
+    }
+
+    if (body.previous) {
+      await releasePreviousCheckout(body.previous);
     }
 
     // The Vercel cron only runs once a day, so release stock held by abandoned
