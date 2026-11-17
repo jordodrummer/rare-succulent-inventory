@@ -1,5 +1,7 @@
 -- Migration: Stripe checkout support
 -- Date: 2026-04-05
+-- Revised 2026-11-16, before it was ever applied: the three functions now
+-- ignore a zero or negative quantity. Safe to run more than once.
 
 -- Part 1: Schema changes
 
@@ -25,6 +27,9 @@ RETURNS BOOLEAN AS $$
 DECLARE
   rows_updated INTEGER;
 BEGIN
+  IF p_quantity IS NULL OR p_quantity <= 0 THEN
+    RETURN FALSE;
+  END IF;
   UPDATE plant_variants
   SET reserved = reserved + p_quantity
   WHERE id = p_variant_id
@@ -38,6 +43,9 @@ $$ LANGUAGE plpgsql;
 CREATE OR REPLACE FUNCTION release_variant(p_variant_id INTEGER, p_quantity INTEGER)
 RETURNS VOID AS $$
 BEGIN
+  IF p_quantity IS NULL OR p_quantity <= 0 THEN
+    RETURN;
+  END IF;
   UPDATE plant_variants
   SET reserved = GREATEST(reserved - p_quantity, 0)
   WHERE id = p_variant_id;
@@ -48,6 +56,9 @@ $$ LANGUAGE plpgsql;
 CREATE OR REPLACE FUNCTION confirm_variant_sale(p_variant_id INTEGER, p_quantity INTEGER)
 RETURNS VOID AS $$
 BEGIN
+  IF p_quantity IS NULL OR p_quantity <= 0 THEN
+    RETURN;
+  END IF;
   UPDATE plant_variants
   SET inventory = inventory - p_quantity,
       reserved = GREATEST(reserved - p_quantity, 0)

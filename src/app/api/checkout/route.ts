@@ -9,7 +9,6 @@ import { cleanupExpiredReservations, reserveInventory } from "@/lib/db/reservati
 import { dollarsToCents } from "@/lib/money";
 
 type CheckoutItem = {
-  plant_id: number;
   variant_id: number;
   quantity: number;
 };
@@ -33,11 +32,24 @@ export async function POST(request: Request) {
     const { items, guest_name, guest_email, shipping_address } = body;
     const isPickup = body.shipping_method === "pickup";
 
-    if (!items || items.length === 0) {
+    if (!Array.isArray(items) || items.length === 0) {
       return NextResponse.json({ error: "Cart is empty" }, { status: 400 });
     }
-    if (!guest_name || !guest_email) {
+    // Quantities come from the client. A zero, negative or fractional quantity
+    // would pass the stock check below and lower the total.
+    for (const item of items) {
+      if (!Number.isInteger(item?.variant_id) || !Number.isInteger(item?.quantity) || item.quantity < 1) {
+        return NextResponse.json({ error: "Invalid cart item" }, { status: 400 });
+      }
+    }
+    if (new Set(items.map((i) => i.variant_id)).size !== items.length) {
+      return NextResponse.json({ error: "Duplicate cart item" }, { status: 400 });
+    }
+    if (typeof guest_name !== "string" || typeof guest_email !== "string" || !guest_name.trim() || !guest_email.trim()) {
       return NextResponse.json({ error: "Name and email are required" }, { status: 400 });
+    }
+    if (guest_name.length > 200 || guest_email.length > 200 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(guest_email)) {
+      return NextResponse.json({ error: "Invalid name or email" }, { status: 400 });
     }
     if (!isPickup) {
       if (!shipping_address?.street || !shipping_address?.city || !shipping_address?.state || !shipping_address?.zip) {
@@ -157,7 +169,7 @@ export async function POST(request: Request) {
     // Create order items
     for (const item of items) {
       const variant = variantMap.get(item.variant_id)!;
-      await createOrderItem(order.id, item.plant_id, item.variant_id, variant.price, item.quantity);
+      await createOrderItem(order.id, variant.plant_id, item.variant_id, variant.price, item.quantity);
     }
 
     return NextResponse.json({
